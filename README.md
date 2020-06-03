@@ -51,8 +51,8 @@ For the library, see the [godoc](https://godoc.org/github.com/zededa/shibboleth)
 The CLI has two main commands:
 
 ```console
-$ echo somemessage | shibboleth wrap
-$ echo somewrappedmessage | shibboleth unwrap
+$ echo cleartest_message | shibboleth wrap
+$ echo wrapped_message | shibboleth unwrap
 ```
 
 You need to pass the CLI parameters for:
@@ -88,7 +88,7 @@ Sender
 
 1. Creates the original unprotected data to send.
 1. Generates an ephemeral ECC key-pair
-1. Signs the ECC public key with the well-known certificate. As stated above, this certificate itself must either be shared in advance with the Receiver, or have been signed by a CA trusted by the Receiver.
+1. OPTIONAL: Signs the ECC public key with the well-known certificate. As stated above, the signer certificate must either be shared in advance with the Receiver, or have been signed by a CA trusted by the Receiver.
 1. Uses the Receiver's public key, the Sender's private key and the pre-agreed parameters to generate a session key that will be used only for this message.
 1. Encrypts the payload with the session key
 1. Hashes the payload
@@ -104,31 +104,43 @@ The Shibboleth message is as follows:
     "signature": "", // signature of the hash of the payload
     "algo": "", // the algorithm used
    },
-  "certificate": {
-    "body": "", // the Sender's certificate, PEM-encoded; optional
-    "hash": "", // the hash of the Sender's certificate, base64-encoded
+  "signer": {
+    "body": "", // the Sender's signer, either the actual ECC public key, or a signed certificate, PEM-encoded; optional
+    "hash": "", // the hash of the Sender's signer body, base64-encoded
+    "type": "", // the type of the Sender's signer body, one of: "C" (certificate), "K" (key)
   }
 }
 ```
 
-The Sender has the option to include its certificate - the signed ECC public key - in the message, or not. It MUST include the hash of 
-the certificate. This enables the Receiver to know whether or not it can validate the message. If the Receiver has a hash of a certificate
-that matches the hash, then it knows the certificate; if it does not, it does not. If the certificate is included, the Receiver can
+To save on space, the message will be minimized to eliminate unnecessary newlines and whitespace.
+
+The Sender has the option to include its signer - the ECC public key or a signed certificate - in the message, or not. It MUST include the hash of 
+the signer body. This enables the Receiver to know whether or not it can validate the message. If the Receiver has a hash of a signer
+that matches the hash, then it knows the signer; if it does not, it does not. If the signer is included and is a certificate, the Receiver can
 validate the certificate in whatever way it normally would.
 
-If the certificate is not included, and the Receiver does not have a certificate whose hash matches the certificate of the ECC public key
-used to sign the payload, then the Receiver cannot use the payload, unless it has other channels to retrieve an appropriate certificate.
-Retrieving that certificate is beyond the scope of Shibboleth.
+If the signer is not included, and the Receiver does not have a signer whose hash matches that of the signer
+used to sign the payload, then the Receiver cannot use the payload, unless it has other channels to retrieve an appropriate signer.
+Retrieving that signer is beyond the scope of Shibboleth.
 
 Receiver
 
 1. Receives the message
-1. Checks if it has a certificate it trusts, whose hash matches the field `certificateHash`. If it does, it can continue. If it does not:
-   * Retrieve the certificate in the `certificate` field and try to validate it. If it cannot be validated, nothing further can be done.
-1. Use the Sender's public key in the certificate, the Receiver's private key and the pre-agreed parameters to regenerate the session key for this message.
+1. Checks if it has a signer it trusts, whose hash matches the field `signer.hash`. If it does, it can continue. If it does not:
+   * Retrieve the signer in the `signer.body` field and try to validate it. If it cannot be validated, nothing further can be done.
+1. Use the Sender's public key in the signer, the Receiver's private key and the pre-agreed parameters to regenerate the session key for this message.
 1. Use the session key to decrypt the message.
-1. Use the Sender's public key in the certificate to validate the hash of the payload.
+1. Use the Sender's public key in the signer to validate the hash of the payload.
 
 The algorithms supported are identical to those supported by [TLS 1.3](https://tools.ietf.org/html/rfc8446#appendix-B.4). The `TLS_` prefix
 is kept, even though this is not TLS, for simplicity and consistency's sake.
+
+These are:
+
+* `TLS_AES_256_GCM_SHA384`
+* `TLS_CHACHA20_POLY1305_SHA256`
+* `TLS_AES_128_GCM_SHA256`
+* `TLS_AES_128_CCM_8_SHA256`
+* `TLS_AES_128_CCM_SHA256`
+
 
