@@ -19,7 +19,7 @@ rely on it.
 * Protection: encrypting a message so prying eyes cannot read it
 * Authentication: validating a message so you can be sure the sender actually sent it and it has not been tampered with
 
-You can use one, the other or both.
+You can just sign it, or also encrypt it.
 
 When would you use it?
 
@@ -29,6 +29,9 @@ of the data.
 
 Second, if you cannot rely on TLS. For example, you have a man-in-the-middle (mitm) proxy whose certificate is on your endpoint,
 removing all of your protection. Or perhaps your organization requires you to work through a proxy that prevents TLS entirely.
+
+On the other hand, sometimes you actually _want_ the content to be visible to inspectors. In that case, you can choose just
+to sign the payload, but not encrypt it.
 
 Shibboleth helps you build applications that provide the two most basic protections in the message body itself.
 
@@ -66,6 +69,8 @@ For wrapping:
 
 * where to find the certificate to use to sign your public key; optional
 * whether to include your certificate/public key in the actual message, or just the hash of it
+* which signature algorithm to use
+* which encryption algorithm to use, if any
 
 For unwrapping:
 
@@ -89,9 +94,10 @@ Sender
 1. Creates the original unprotected data to send.
 1. Generates an ephemeral ECC key-pair
 1. OPTIONAL: Signs the ECC public key with the well-known certificate. As stated above, the signer certificate must either be shared in advance with the Receiver, or have been signed by a CA trusted by the Receiver.
-1. Uses the Receiver's public key, the Sender's private key and the pre-agreed parameters to generate a session key that will be used only for this message.
-1. Encrypts the payload with the session key
-1. Hashes the payload
+1. If encryption is enabled:
+   1. Uses the Receiver's public key, the Sender's private key and the pre-agreed parameters to generate a session key that will be used only for this message.
+   1. Encrypts the payload with the session key
+1. Hashes the final payload
 1. Signs the hash of the payload with the Sender's private key
 1. Constructs the Shibboleth message
 
@@ -99,25 +105,26 @@ The Shibboleth message is as follows:
 
 ```json
 {
-  "payload": {
-    "body": "", // body of the message, the encrypted payload, base64-encoded
-    "signature": "", // signature of the hash of the payload
-    "algo": "", // the algorithm used
-   },
+  "payload": "",   // body of the message, the signed and optionally encrypted payload, base64-encoded
+  "signature": "", // signature of the hash of the payload, prefaced by the algorithm and a colon
+  "algo": "",      // the encryption algorithm used, if any; blank or missing if unencrypted
   "signer": {
-    "body": "", // the Sender's signer, either the actual ECC public key, or a signed certificate, PEM-encoded; optional
-    "hash": "", // the hash of the Sender's signer body, base64-encoded
-    "type": "", // the type of the Sender's signer body, one of: "C" (certificate), "K" (key)
+    "body": "",     // the Sender's signer, either the actual ECC public key, or a signed certificate, PEM-encoded; optional
+    "hash": "",     // the hash of the Sender's signer body, base64-encoded
+    "type": "",     // the type of the Sender's signer body, one of: "C" (certificate), "K" (key)
   }
 }
 ```
 
-To save on space, the message will be minimized to eliminate unnecessary newlines and whitespace.
+The message will be minimized to eliminate unnecessary newlines and whitespace; pass it through a formatter like [jq](https://stedolan.github.io/jq/manual/)
+if you need to make it more readable.
 
 The Sender has the option to include its signer - the ECC public key or a signed certificate - in the message, or not. It MUST include the hash of 
 the signer body. This enables the Receiver to know whether or not it can validate the message. If the Receiver has a hash of a signer
 that matches the hash, then it knows the signer; if it does not, it does not. If the signer is included and is a certificate, the Receiver can
 validate the certificate in whatever way it normally would.
+
+If the signer is included and is a certificate, it should send the entire certificate chain, if any, so that it can be validated by the Receiver.
 
 If the signer is not included, and the Receiver does not have a signer whose hash matches that of the signer
 used to sign the payload, then the Receiver cannot use the payload, unless it has other channels to retrieve an appropriate signer.
@@ -128,12 +135,20 @@ Receiver
 1. Receives the message
 1. Checks if it has a signer it trusts, whose hash matches the field `signer.hash`. If it does, it can continue. If it does not:
    * Retrieve the signer in the `signer.body` field and try to validate it. If it cannot be validated, nothing further can be done.
-1. Use the Sender's public key in the signer, the Receiver's private key and the pre-agreed parameters to regenerate the session key for this message.
-1. Use the session key to decrypt the message.
 1. Use the Sender's public key in the signer to validate the hash of the payload.
+1. If encrypted:
+   1. Use the Sender's public key in the signer, the Receiver's private key and the pre-agreed parameters to regenerate the session key for this message.
+   1. Use the session key to decrypt the message.
 
-The algorithms supported are identical to those supported by [TLS 1.3](https://tools.ietf.org/html/rfc8446#appendix-B.4). The `TLS_` prefix
-is kept, even though this is not TLS, for simplicity and consistency's sake.
+### Algorithms
+
+There are two classes of algorithms: encryption and signing.
+
+#### Encryption
+
+If encryption is requested, then the field `algo` is filled with the algorithm used. The algorithms supported are identical to those
+supported by [TLS 1.3](https://tools.ietf.org/html/rfc8446#appendix-B.4). The `TLS_` prefix is kept, even though this is not TLS, for
+simplicity and consistency's sake.
 
 These are:
 
@@ -143,4 +158,22 @@ These are:
 * `TLS_AES_128_CCM_8_SHA256`
 * `TLS_AES_128_CCM_SHA256`
 
+If the payload is sent unencrypted, the `algo` field will be blank or not present.
+
+#### Signing
+
+The payload _always_ is signed (otherwise why are you using Shibboleth). The signature is in the field `signature`. It is composed of
+two parts, separated by a `:` character:
+
+```
+<algorithm>:<signature>
+```
+
+The signature algorithm supported is identical to those supported by [TLS 1.3](https://tools.ietf.org/html/rfc8446#appendix-B.3.1.3). They are:
+
+* `RSA`
+* `ECDSA`
+* `EdDSA`
+
+The signature itself is base64-encoded for readability.
 
